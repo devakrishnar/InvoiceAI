@@ -1,0 +1,49 @@
+# Node.js
+node_modules/
+
+# Python Virtual Environment
+backend/venv/
+venv/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local Database
+backend/invoices.db
+invoices.db
+
+# Uploads and User Files
+backend/uploads/
+uploads/
+mock_onedrive/
+
+# Environments
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# IDEs & System Files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# Build & Outputs
+frontend/build/
+frontend/.svelte-kit/
+frontend/.output/
+frontend/.vercel/
+frontend/.netlify/
+frontend/.wrangler/

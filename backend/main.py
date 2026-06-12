@@ -65,7 +65,56 @@ def extract_text_from_pdf(file_path):
         if isinstance(page_text, str):
             text += page_text
     doc.close()
+    
+    # OCR Fallback: If standard extraction fails to extract meaningful text (e.g. image-only PDF)
+    if len(text.strip()) < 50:
+        print(f"Standard text extraction yielded only {len(text.strip())} characters. Falling back to Gemini Multimodal OCR...")
+        try:
+            text = extract_text_via_gemini_ocr(file_path)
+        except Exception as ocr_failed:
+            print(f"Failed to run Gemini OCR: {ocr_failed}")
+            
     return text
+
+
+def extract_text_via_gemini_ocr(file_path):
+    from google import genai
+    from google.genai import types
+    
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    doc = fitz.open(file_path)
+    ocr_text = ""
+    
+    for page_num, page in enumerate(doc):
+        print(f"OCR Pipeline (Gemini): Processing page {page_num + 1}/{len(doc)}...")
+        
+        # 1. Render page to image at 150 DPI (highly sufficient for Gemini vision)
+        pix = page.get_pixmap(dpi=150)
+        img_bytes = pix.tobytes("png")
+        
+        # 2. Call Gemini model to transcribe text
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    types.Part.from_bytes(
+                        data=img_bytes,
+                        mime_type="image/png"
+                    ),
+                    "Transcribe all text from this invoice image accurately. Keep the text layout readable. Do not add any introductory or explanatory text, just output the exact text contents of the document."
+                ]
+            )
+            page_text = response.text or ""
+            print(f"OCR Pipeline (Gemini): Successfully extracted {len(page_text)} characters from page {page_num + 1}")
+            ocr_text += page_text + "\n"
+        except Exception as ocr_err:
+            print(f"OCR Pipeline (Gemini) failed on page {page_num + 1}: {ocr_err}")
+            # Fall back to standard extraction if Gemini fails
+            page_text = page.get_text()
+            ocr_text += page_text + "\n"
+            
+    doc.close()
+    return ocr_text
 
 
 def process_invoice_in_background(invoice_id, file_path, filename):

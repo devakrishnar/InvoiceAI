@@ -7,6 +7,8 @@ import fitz
 import requests
 import threading
 import time
+import typing
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 import chromadb
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -18,7 +20,9 @@ from database import (
     update_invoice_metadata,
     update_invoice_status,
     get_all_invoices,
-    check_invoice_exists
+    check_invoice_exists,
+    get_invoice_by_id,
+    delete_invoice_by_id
 )
 
 # Load configuration
@@ -28,7 +32,15 @@ FLOWISE_API_URL = os.getenv("FLOWISE_API_URL", "http://localhost:3000")
 FLOWISE_CHAT_FLOW_ID = os.getenv("FLOWISE_CHAT_FLOW_ID", "")
 MOCK_ONEDRIVE_DIR = os.getenv("MOCK_ONEDRIVE_DIR", "d:/InvoiceAI/mock_onedrive")
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start the directory watcher thread on startup
+    t = threading.Thread(target=watch_onedrive_folder)
+    t.daemon = True
+    t.start()
+    yield
+
+app = FastAPI(lifespan=lifespan)
 create_database()
 
 UPLOAD_FOLDER = "uploads"
@@ -49,7 +61,9 @@ def extract_text_from_pdf(file_path):
     doc = fitz.open(file_path)
     text = ""
     for page in doc:
-        text += page.get_text()
+        page_text = page.get_text()
+        if isinstance(page_text, str):
+            text += page_text
     doc.close()
     return text
 
@@ -110,7 +124,9 @@ def process_invoice_in_background(invoice_id, file_path, filename):
             print(f"Generated {len(vectors)} embeddings for {filename}")
 
             chroma_client = chromadb.HttpClient(host="localhost", port=8000)
-            chroma_client._server._session.headers["Content-Type"] = "application/json"
+            client_any = typing.cast(typing.Any, chroma_client)
+            if hasattr(client_any, "_server") and hasattr(client_any._server, "_session"):
+                client_any._server._session.headers["Content-Type"] = "application/json"
             
             try:
                 collection = chroma_client.get_collection("invoices")
@@ -119,7 +135,7 @@ def process_invoice_in_background(invoice_id, file_path, filename):
 
             collection.add(
                 documents=chunks,
-                embeddings=vectors,
+                embeddings=typing.cast(typing.Any, vectors),
                 ids=[f"{filename}_{i}" for i in range(len(chunks))],
                 metadatas=[{"source": filename} for _ in chunks]
             )
@@ -187,12 +203,7 @@ def watch_onedrive_folder():
         time.sleep(5)
 
 
-@app.on_event("startup")
-def startup_event():
-    # Start the directory watcher thread on startup
-    t = threading.Thread(target=watch_onedrive_folder)
-    t.daemon = True
-    t.start()
+# Startup is managed by FastAPI lifespan event handler
 
 
 @app.get("/")
@@ -222,6 +233,57 @@ def get_invoices():
             "status": r[7] if len(r) > 7 else "Processed"
         })
     return invoices
+
+
+@app.delete("/api/invoices/{invoice_id}")
+def delete_invoice(invoice_id: int):
+    # 1. Get invoice details to find filename and file path
+    invoice = get_invoice_by_id(invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    filename = invoice[1]
+    file_path = invoice[6]
+
+    # 2. Delete from SQLite database
+    delete_invoice_by_id(invoice_id)
+
+    # 3. Delete physical files from uploads
+    if file_path and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            print(f"Deleted local file: {file_path}")
+        except Exception as e:
+            print(f"Failed to delete local file {file_path}: {e}")
+
+    # 4. Delete physical file from mock OneDrive (if exists) to avoid auto-re-ingestion
+    mock_onedrive_path = os.path.join(MOCK_ONEDRIVE_DIR, filename)
+    if os.path.exists(mock_onedrive_path):
+        try:
+            os.remove(mock_onedrive_path)
+            print(f"Deleted OneDrive file: {mock_onedrive_path}")
+        except Exception as e:
+            print(f"Failed to delete OneDrive file {mock_onedrive_path}: {e}")
+
+    # 5. Delete from Chroma Vector DB
+    try:
+        chroma_client = chromadb.HttpClient(host="localhost", port=8000)
+        client_any = typing.cast(typing.Any, chroma_client)
+        if hasattr(client_any, "_server") and hasattr(client_any._server, "_session"):
+            client_any._server._session.headers["Content-Type"] = "application/json"
+        
+        try:
+            collection = chroma_client.get_collection("invoices")
+            # Delete chunks belonging to this file using the source metadata filter
+            collection.delete(where={"source": filename})
+            print(f"Successfully deleted Chroma vector index for {filename}")
+        except Exception as chroma_err:
+            print(f"Chroma collection not found or failed to delete: {chroma_err}")
+    except Exception as e:
+        print(f"Failed to connect to Chroma client: {e}")
+
+    return {"message": f"Successfully deleted invoice {filename} from database, storage, and Chroma vector index"}
+
 
 
 @app.post("/api/chat")
@@ -274,7 +336,7 @@ Answer:"""
                 model="gemini-2.5-flash",
                 contents=prompt
             )
-            return {"text": response.text.strip()}
+            return {"text": (response.text or "").strip()}
         except Exception as e:
             print(f"Fallback chat execution failed: {e}")
             raise HTTPException(status_code=500, detail=f"Gemini Chat Fallback failed: {str(e)}")
@@ -306,6 +368,8 @@ Answer:"""
 
 @app.post("/upload-invoice")
 def upload_invoice(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is missing")
     file_path = os.path.join(UPLOAD_FOLDER, file.filename)
 
     # Save uploaded file

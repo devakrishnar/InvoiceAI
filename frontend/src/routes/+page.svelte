@@ -125,6 +125,31 @@
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
 	}
 
+	/**
+	 * @param {number} id
+	 * @param {string} filename
+	 */
+	async function deleteInvoice(id, filename) {
+		if (!confirm(`Are you sure you want to delete "${filename}"? This will remove it from the database, storage, and Chroma vector index.`)) {
+			return;
+		}
+
+		try {
+			const res = await fetch(`http://localhost:8080/api/invoices/${id}`, {
+				method: 'DELETE'
+			});
+			if (res.ok) {
+				await fetchInvoices();
+			} else {
+				const errData = await res.json();
+				alert(errData.detail || 'Failed to delete invoice');
+			}
+		} catch (err) {
+			alert('Unable to connect to FastAPI backend server to delete invoice');
+		}
+	}
+
+
 	// Live poll for state transitions
 	let pollInterval;
 	onMount(() => {
@@ -291,6 +316,7 @@
 									<th>Date</th>
 									<th>Total Amount</th>
 									<th>Sync Status</th>
+									<th style="text-align: right; width: 80px;">Actions</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -315,6 +341,15 @@
 												{/if}
 												{invoice.status}
 											</span>
+										</td>
+										<td style="text-align: right;">
+											<button 
+												class="btn-delete" 
+												onclick={() => deleteInvoice(invoice.id, invoice.filename)}
+												title="Delete Invoice"
+											>
+												<span class="trash-icon">🗑️</span>
+											</button>
 										</td>
 									</tr>
 								{/each}
@@ -903,4 +938,30 @@
 		border-radius: 4px;
 		color: var(--text-secondary);
 	}
+
+	.btn-delete {
+		background: transparent;
+		border: 1px solid rgba(239, 68, 68, 0.2);
+		border-radius: 8px;
+		width: 32px;
+		height: 32px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+		transition: all var(--transition-fast);
+		color: var(--color-danger);
+	}
+
+	.btn-delete:hover {
+		background: rgba(239, 68, 68, 0.1);
+		border-color: var(--color-danger);
+		box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);
+		transform: scale(1.05);
+	}
+
+	.trash-icon {
+		font-size: 14px;
+	}
+
 </style>

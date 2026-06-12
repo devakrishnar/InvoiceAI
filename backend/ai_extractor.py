@@ -29,7 +29,7 @@ Invoice text:
         contents=prompt
     )
 
-    result = response.text.strip()
+    result = (response.text or "").strip()
 
     if result.startswith("```json"):
         result = result.replace("```json", "").replace("```", "").strip()

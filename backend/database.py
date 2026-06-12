@@ -150,4 +150,22 @@ def get_all_invoices():
 
     connection.close()
 
-    return rows
+    return rows
+
+
+def get_invoice_by_id(invoice_id):
+    connection = sqlite3.connect("invoices.db")
+    cursor = connection.cursor()
+    cursor.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,))
+    row = cursor.fetchone()
+    connection.close()
+    return row
+
+
+def delete_invoice_by_id(invoice_id):
+    connection = sqlite3.connect("invoices.db")
+    cursor = connection.cursor()
+    cursor.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
+    connection.commit()
+    connection.close()
+

@@ -207,7 +207,7 @@
 
 	.copilot-avatar {
 		font-size: 28px;
-		background: rgba(99, 102, 241, 0.1);
+		background: rgba(132, 176, 193, 0.1);
 		width: 50px;
 		height: 50px;
 		border-radius: 12px;
@@ -307,7 +307,7 @@
 		width: 36px;
 		height: 36px;
 		border-radius: 50%;
-		background: rgba(99, 102, 241, 0.15);
+		background: rgba(132, 176, 193, 0.15);
 		border: 1px solid var(--border-glow);
 		display: flex;
 		align-items: center;
@@ -424,7 +424,7 @@
 
 	.prompt-btn:hover {
 		color: var(--text-primary);
-		background: rgba(99, 102, 241, 0.06);
+		background: rgba(132, 176, 193, 0.06);
 		border-color: var(--border-glow);
 		box-shadow: var(--shadow-sm);
 		transform: translateY(-1px);

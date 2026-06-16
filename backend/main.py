@@ -69,10 +69,7 @@ def extract_text_from_pdf(file_path):
     # OCR Fallback: If standard extraction fails to extract meaningful text (e.g. image-only PDF)
     if len(text.strip()) < 50:
         print(f"Standard text extraction yielded only {len(text.strip())} characters. Falling back to Gemini Multimodal OCR...")
-        try:
-            text = extract_text_via_gemini_ocr(file_path)
-        except Exception as ocr_failed:
-            print(f"Failed to run Gemini OCR: {ocr_failed}")
+        text = extract_text_via_gemini_ocr(file_path)
             
     return text
 
@@ -92,26 +89,37 @@ def extract_text_via_gemini_ocr(file_path):
         pix = page.get_pixmap(dpi=150)
         img_bytes = pix.tobytes("png")
         
-        # 2. Call Gemini model to transcribe text
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    types.Part.from_bytes(
-                        data=img_bytes,
-                        mime_type="image/png"
-                    ),
-                    "Transcribe all text from this invoice image accurately. Keep the text layout readable. Do not add any introductory or explanatory text, just output the exact text contents of the document."
-                ]
-            )
-            page_text = response.text or ""
-            print(f"OCR Pipeline (Gemini): Successfully extracted {len(page_text)} characters from page {page_num + 1}")
-            ocr_text += page_text + "\n"
-        except Exception as ocr_err:
-            print(f"OCR Pipeline (Gemini) failed on page {page_num + 1}: {ocr_err}")
-            # Fall back to standard extraction if Gemini fails
-            page_text = page.get_text()
-            ocr_text += page_text + "\n"
+        # 2. Call Gemini model to transcribe text with exponential backoff retry logic
+        max_retries = 3
+        base_delay = 2  # seconds
+        page_text = ""
+        
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[
+                        types.Part.from_bytes(
+                            data=img_bytes,
+                            mime_type="image/png"
+                        ),
+                        "Transcribe all text from this invoice image accurately. Keep the text layout readable. Do not add any introductory or explanatory text, just output the exact text contents of the document."
+                    ]
+                )
+                page_text = response.text or ""
+                print(f"OCR Pipeline (Gemini): Successfully extracted {len(page_text)} characters from page {page_num + 1}")
+                break
+            except Exception as ocr_err:
+                if attempt == max_retries - 1:
+                    print(f"OCR Pipeline (Gemini) failed on page {page_num + 1} after {max_retries} attempts: {ocr_err}")
+                    doc.close()
+                    raise ocr_err
+                
+                delay = base_delay * (2 ** attempt)
+                print(f"OCR Pipeline (Gemini) attempt {attempt + 1} failed: {ocr_err}. Retrying in {delay}s...")
+                time.sleep(delay)
+                
+        ocr_text += page_text + "\n"
             
     doc.close()
     return ocr_text
@@ -122,15 +130,28 @@ def process_invoice_in_background(invoice_id, file_path, filename):
         print(f"Background Process: Starting processing for {filename} (ID: {invoice_id})")
 
         # 1. Extract text from PDF
-        extracted_text = extract_text_from_pdf(file_path)
+        try:
+            extracted_text = extract_text_from_pdf(file_path)
+        except Exception as ocr_err:
+            err_msg = str(ocr_err)
+            if "503" in err_msg or "UNAVAILABLE" in err_msg.upper() or "demand" in err_msg.lower():
+                status_msg = "Failed (Gemini API Overloaded)"
+            elif "429" in err_msg or "quota" in err_msg.lower() or "limit" in err_msg.lower():
+                status_msg = "Failed (Gemini API Quota Exceeded)"
+            else:
+                status_msg = "Failed (OCR Error)"
+                
+            update_invoice_status(invoice_id, status_msg)
+            print(f"Background Process: OCR extraction failed for {filename}: {ocr_err}")
+            return
 
-        # 2. Extract metadata via Gemini
+        # 2. Extract metadata via Azure OpenAI
         try:
             invoice_data = extract_invoice_data(extracted_text)
-            print(f"Background Process: Gemini metadata extracted for {filename}")
+            print(f"Background Process: Azure metadata extracted for {filename}")
 
         except Exception as e:
-            print(f"Background Process: Gemini extraction failed for {filename}: {e}")
+            print(f"Background Process: Azure extraction failed for {filename}: {e}")
 
             invoice_data = {
                 "invoice_number": "Failed to Parse",
@@ -344,7 +365,7 @@ def chat_with_invoice(body: dict):
     
     # Check if Flowise Chat is configured
     if not FLOWISE_CHAT_FLOW_ID:
-        print("No Flowise Chat Flow ID configured. Falling back to direct Gemini chat with local database context.")
+        print("No Flowise Chat Flow ID configured. Falling back to direct Azure OpenAI chat with local database context.")
         try:
             invoices = get_all_invoices()
             context = "Here is the list of invoices currently extracted and stored in the database:\n\n"
@@ -377,18 +398,31 @@ Guidelines:
 
 User Question: {question}
 Answer:"""
+            from openai import AzureOpenAI
 
-            from google import genai
-            # Initialize Client (uses GEMINI_API_KEY from environment)
-            client = genai.Client()
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
+            client = AzureOpenAI(
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION")
             )
-            return {"text": (response.text or "").strip()}
+
+            response = client.chat.completions.create(
+                model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0
+            )
+
+            return {
+                "text": response.choices[0].message.content.strip()
+            }
         except Exception as e:
             print(f"Fallback chat execution failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Gemini Chat Fallback failed: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Azure Chat Fallback failed: {str(e)}")
 
     # Forward to Flowise Chat Flow
     flowise_url = f"{FLOWISE_API_URL}/api/v1/prediction/{FLOWISE_CHAT_FLOW_ID}"

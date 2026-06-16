@@ -9,15 +9,49 @@
 	let isSyncingOneDrive = $state(false);
 	let syncMessage = $state('');
 
-	// Derived states
+	// Filter state variables
+	let statusFilter = $state('All');
+	let vendorFilter = $state('All');
+
+	// Dynamic list of unique vendors extracted from fetched invoices
+	let uniqueVendors = $derived([
+		'All',
+		...new Set(
+			invoices
+				.map(inv => inv.vendor)
+				.filter(v => v && v !== 'Processing...' && v !== 'N/A' && v !== 'Unknown Vendor')
+		)
+	]);
+
+	// Derived states combining search query and dropdown filters
 	let filteredInvoices = $derived(
 		invoices.filter(inv => {
+			// Search query match
 			const query = searchQuery.toLowerCase();
-			return (
+			const matchesQuery = 
 				(inv.filename?.toLowerCase() || '').includes(query) ||
 				(inv.vendor?.toLowerCase() || '').includes(query) ||
-				(inv.invoice_number?.toLowerCase() || '').includes(query)
-			);
+				(inv.invoice_number?.toLowerCase() || '').includes(query);
+
+			// Status filter match
+			let matchesStatus = true;
+			if (statusFilter !== 'All') {
+				if (statusFilter === 'Processed') {
+					matchesStatus = inv.status.startsWith('Processed');
+				} else if (statusFilter === 'Ingesting') {
+					matchesStatus = inv.status === 'Ingesting' || inv.status === 'Pending';
+				} else if (statusFilter === 'Failed') {
+					matchesStatus = inv.status.startsWith('Failed');
+				}
+			}
+
+			// Vendor filter match
+			let matchesVendor = true;
+			if (vendorFilter !== 'All') {
+				matchesVendor = inv.vendor === vendorFilter;
+			}
+
+			return matchesQuery && matchesStatus && matchesVendor;
 		})
 	);
 
@@ -213,152 +247,173 @@
 		</div>
 	</section>
 
-	<!-- Main Two-Column Layout -->
-	<div class="dashboard-grid">
-		<!-- Left Panel: Ingestion Zone -->
-		<section class="panel-left">
-			<div class="card panel-card">
-				<h4 class="card-title">Manual Ingestion</h4>
-				<p class="card-desc">Drag and drop a PDF invoice to instantly parse metadata and index into Chroma DB.</p>
+	<!-- Ingestion Hub (Full Width layout with two cards side by side) -->
+	<div class="ingestion-hub">
+		<!-- Card: Manual Ingestion -->
+		<div class="card panel-card upload-card">
+			<h4 class="card-title">Manual Ingestion</h4>
+			<p class="card-desc">Drag and drop a PDF invoice to instantly parse metadata and index into Chroma DB.</p>
 
-				<!-- Drop Zone -->
-				<label 
-					class="upload-zone"
-					class:dragging={isDragging}
-					class:uploading={isUploading}
-					ondragover={(e) => { e.preventDefault(); isDragging = true; }}
-					ondragleave={() => isDragging = false}
-					ondrop={handleDrop}
-				>
-					<input type="file" accept=".pdf" class="hidden-input" onchange={handleFileChange} disabled={isUploading} />
-					{#if isUploading}
-						<div class="spinner-container">
-							<div class="spinner"></div>
-							<p>Analyzing invoice structure...</p>
-							<p class="subtext">Gemini & Flowise pipeline active</p>
-						</div>
+			<!-- Drop Zone -->
+			<label 
+				class="upload-zone"
+				class:dragging={isDragging}
+				class:uploading={isUploading}
+				ondragover={(e) => { e.preventDefault(); isDragging = true; }}
+				ondragleave={() => isDragging = false}
+				ondrop={handleDrop}
+			>
+				<input type="file" accept=".pdf" class="hidden-input" onchange={handleFileChange} disabled={isUploading} />
+				{#if isUploading}
+					<div class="spinner-container">
+						<div class="spinner"></div>
+						<p>Analyzing invoice structure...</p>
+						<p class="subtext">Gemini & Flowise pipeline active</p>
+					</div>
+				{:else}
+					<div class="upload-prompt">
+						<span class="upload-icon">📥</span>
+						<p class="upload-main-text">Drag invoice PDF here or <span class="highlight">browse</span></p>
+						<p class="upload-sub-text">Supports standard PDF invoice templates</p>
+					</div>
+				{/if}
+			</label>
+
+			{#if uploadError}
+				<div class="error-banner">
+					<span class="error-icon">⚠️</span>
+					<p>{uploadError}</p>
+				</div>
+			{/if}
+		</div>
+
+		<!-- Card: OneDrive Watcher -->
+		<div class="card panel-card onedrive-card">
+			<div class="onedrive-header">
+				<div class="onedrive-title-group">
+					<span class="onedrive-icon">☁️</span>
+					<div>
+						<h4 class="card-title">OneDrive Directory Watcher</h4>
+						<span class="badge-status">Automated Monitor</span>
+					</div>
+				</div>
+			</div>
+			<p class="card-desc">FastAPI monitors this directory in the background. Dropping files in this path mimics automated email/OneDrive routing.</p>
+			
+			<div class="directory-path">
+				<span class="path-icon">📁</span>
+				<code>d:\InvoiceAI\mock_onedrive</code>
+			</div>
+
+			<div class="onedrive-actions">
+				<button class="btn btn-secondary" onclick={forceSyncOneDrive} disabled={isSyncingOneDrive}>
+					{#if isSyncingOneDrive}
+						<div class="btn-spinner"></div>
+						<span>Scanning folder...</span>
 					{:else}
-						<div class="upload-prompt">
-							<span class="upload-icon">📥</span>
-							<p class="upload-main-text">Drag invoice PDF here or <span class="highlight">browse</span></p>
-							<p class="upload-sub-text">Supports standard PDF invoice templates</p>
-						</div>
+						<span>Sync Mock OneDrive</span>
 					{/if}
-				</label>
-
-				{#if uploadError}
-					<div class="error-banner">
-						<span class="error-icon">⚠️</span>
-						<p>{uploadError}</p>
-					</div>
-				{/if}
+				</button>
 			</div>
 
-			<!-- OneDrive simulation panel -->
-			<div class="card panel-card onedrive-card">
-				<div class="onedrive-header">
-					<div class="onedrive-title-group">
-						<span class="onedrive-icon">☁️</span>
-						<div>
-							<h4 class="card-title">OneDrive Directory Watcher</h4>
-							<span class="badge-status">Automated Monitor</span>
-						</div>
-					</div>
+			{#if syncMessage}
+				<div class="sync-banner">
+					<span class="sync-icon">✓</span>
+					<p>{syncMessage}</p>
 				</div>
-				<p class="card-desc">FastAPI monitors this directory in the background. Dropping files in this path mimics automated email/OneDrive routing.</p>
-				
-				<div class="directory-path">
-					<span class="path-icon">📁</span>
-					<code>d:\InvoiceAI\mock_onedrive</code>
-				</div>
+			{/if}
+		</div>
+	</div>
 
-				<div class="onedrive-actions">
-					<button class="btn btn-secondary" onclick={forceSyncOneDrive} disabled={isSyncingOneDrive}>
-						{#if isSyncingOneDrive}
-							<div class="btn-spinner"></div>
-							<span>Scanning folder...</span>
-						{:else}
-							<span>Sync Mock OneDrive</span>
-						{/if}
-					</button>
-				</div>
-
-				{#if syncMessage}
-					<div class="sync-banner">
-						<span class="sync-icon">✓</span>
-						<p>{syncMessage}</p>
-					</div>
-				{/if}
-			</div>
-		</section>
-
-		<!-- Right Panel: Data Table -->
-		<section class="panel-right">
-			<div class="card panel-card table-card">
-				<div class="table-header">
+	<!-- Bottom Section: Invoice Repository (Full Width table) -->
+	<div class="repository-section">
+		<div class="card panel-card table-card">
+			<div class="table-header">
+				<div class="table-header-left">
 					<h4 class="card-title">Ingested Invoice Repository</h4>
 					<span class="count-badge">{filteredInvoices.length} entries</span>
 				</div>
-
-				<div class="table-wrapper">
-					{#if filteredInvoices.length === 0}
-						<div class="empty-state">
-							<p>No invoices found.</p>
-							<p class="empty-sub">Upload an invoice or trigger OneDrive synchronization.</p>
-						</div>
-					{:else}
-						<table>
-							<thead>
-								<tr>
-									<th>Document / Filename</th>
-									<th>Invoice #</th>
-									<th>Vendor</th>
-									<th>Date</th>
-									<th>Total Amount</th>
-									<th>Sync Status</th>
-									<th style="text-align: right; width: 80px;">Actions</th>
-								</tr>
-							</thead>
-							<tbody>
-								{#each filteredInvoices as invoice (invoice.id)}
-									<tr class="table-row">
-										<td class="td-filename">
-											<div class="file-cell">
-												<span class="file-emoji">📄</span>
-												<span class="filename-text" title={invoice.filename}>{invoice.filename}</span>
-											</div>
-										</td>
-										<td><code>{invoice.invoice_number}</code></td>
-										<td class="td-bold">{invoice.vendor}</td>
-										<td>{invoice.date}</td>
-										<td class="td-amount">{invoice.total_amount}</td>
-										<td>
-											<span class="status-badge" class:status-processed={invoice.status.startsWith('Processed')} class:status-ingesting={invoice.status === 'Ingesting'} class:status-failed={invoice.status.startsWith('Failed')}>
-												{#if invoice.status === 'Ingesting'}
-													<span class="status-dot-pulse"></span>
-												{:else}
-													<span class="status-dot"></span>
-												{/if}
-												{invoice.status}
-											</span>
-										</td>
-										<td style="text-align: right;">
-											<button 
-												class="btn-delete" 
-												onclick={() => deleteInvoice(invoice.id, invoice.filename)}
-												title="Delete Invoice"
-											>
-												<span class="trash-icon">🗑️</span>
-											</button>
-										</td>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
-					{/if}
+				
+				<!-- Filter Control Group -->
+				<div class="filter-group">
+					<div class="filter-item">
+						<span class="filter-label">Status:</span>
+						<select class="filter-select" bind:value={statusFilter}>
+							<option value="All">All Statuses</option>
+							<option value="Processed">Processed</option>
+							<option value="Ingesting">Ingesting</option>
+							<option value="Failed">Failed</option>
+						</select>
+					</div>
+					<div class="filter-item">
+						<span class="filter-label">Vendor:</span>
+						<select class="filter-select" bind:value={vendorFilter}>
+							{#each uniqueVendors as vendor}
+								<option value={vendor}>{vendor === 'All' ? 'All Vendors' : vendor}</option>
+							{/each}
+						</select>
+					</div>
 				</div>
 			</div>
-		</section>
+
+			<div class="table-wrapper">
+				{#if filteredInvoices.length === 0}
+					<div class="empty-state">
+						<p>No invoices found.</p>
+						<p class="empty-sub">Upload an invoice or trigger OneDrive synchronization.</p>
+					</div>
+				{:else}
+					<table>
+						<thead>
+							<tr>
+								<th>Document / Filename</th>
+								<th>Invoice #</th>
+								<th>Vendor</th>
+								<th>Date</th>
+								<th>Total Amount</th>
+								<th>Sync Status</th>
+								<th style="text-align: right; width: 80px;">Actions</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each filteredInvoices as invoice (invoice.id)}
+								<tr class="table-row">
+									<td class="td-filename">
+										<div class="file-cell">
+											<span class="file-emoji">📄</span>
+											<span class="filename-text" title={invoice.filename}>{invoice.filename}</span>
+										</div>
+									</td>
+									<td><code>{invoice.invoice_number}</code></td>
+									<td class="td-bold">{invoice.vendor}</td>
+									<td>{invoice.date}</td>
+									<td class="td-amount">{invoice.total_amount}</td>
+									<td>
+										<span class="status-badge" class:status-processed={invoice.status.startsWith('Processed')} class:status-ingesting={invoice.status === 'Ingesting'} class:status-failed={invoice.status.startsWith('Failed')}>
+											{#if invoice.status === 'Ingesting'}
+												<span class="status-dot-pulse"></span>
+											{:else}
+												<span class="status-dot"></span>
+											{/if}
+											{invoice.status}
+										</span>
+									</td>
+									<td style="text-align: right;">
+										<button 
+											class="btn-delete" 
+											onclick={() => deleteInvoice(invoice.id, invoice.filename)}
+											title="Delete Invoice"
+										>
+											<span class="trash-icon">🗑️</span>
+										</button>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				{/if}
+			</div>
+		</div>
 	</div>
 </div>
 
@@ -486,24 +541,21 @@
 		border: 1px solid var(--border-color);
 	}
 
-	/* Layout Grid */
-	.dashboard-grid {
+	/* Layout Styles */
+	.ingestion-hub {
 		display: grid;
-		grid-template-columns: 420px 1fr;
+		grid-template-columns: 1fr 1fr;
 		gap: 24px;
-		align-items: start;
 	}
 
-	@media (max-width: 1200px) {
-		.dashboard-grid {
+	@media (max-width: 900px) {
+		.ingestion-hub {
 			grid-template-columns: 1fr;
 		}
 	}
 
-	.panel-left {
-		display: flex;
-		flex-direction: column;
-		gap: 24px;
+	.repository-section {
+		width: 100%;
 	}
 
 	.card {
@@ -547,12 +599,12 @@
 
 	.upload-zone:hover {
 		border-color: var(--color-primary);
-		background: rgba(99, 102, 241, 0.04);
+		background: rgba(132, 176, 193, 0.04);
 	}
 
 	.upload-zone.dragging {
 		border-color: var(--color-primary);
-		background: rgba(99, 102, 241, 0.08);
+		background: rgba(132, 176, 193, 0.08);
 		transform: scale(0.99);
 	}
 
@@ -653,7 +705,7 @@
 		font-size: 10px;
 		font-weight: 600;
 		color: var(--color-primary);
-		background: rgba(99, 102, 241, 0.1);
+		background: rgba(132, 176, 193, 0.1);
 		padding: 2px 8px;
 		border-radius: 10px;
 		border: 1px solid var(--border-glow);
@@ -761,11 +813,19 @@
 	}
 
 	.table-header {
-		padding: 24px;
+		padding: 20px 24px;
 		border-bottom: 1px solid var(--border-color);
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
+		flex-wrap: wrap;
+		gap: 16px;
+	}
+
+	.table-header-left {
+		display: flex;
+		align-items: center;
+		gap: 12px;
 	}
 
 	.count-badge {
@@ -776,6 +836,44 @@
 		padding: 4px 10px;
 		border-radius: 12px;
 		color: var(--text-secondary);
+	}
+
+	/* Filters Group styles */
+	.filter-group {
+		display: flex;
+		gap: 16px;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+
+	.filter-item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.filter-label {
+		font-size: 12px;
+		color: var(--text-muted);
+		font-weight: 500;
+	}
+
+	.filter-select {
+		background: rgba(13, 42, 103, 0.25);
+		border: 1px solid var(--border-color);
+		border-radius: 8px;
+		padding: 6px 12px;
+		font-family: var(--font-sans);
+		font-size: 13px;
+		color: var(--text-primary);
+		outline: none;
+		cursor: pointer;
+		transition: all var(--transition-fast);
+	}
+
+	.filter-select:focus {
+		border-color: var(--color-primary);
+		box-shadow: var(--shadow-glow);
 	}
 
 	.table-wrapper {

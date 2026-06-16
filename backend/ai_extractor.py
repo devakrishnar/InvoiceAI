@@ -1,11 +1,15 @@
-from google import genai
+from openai import AzureOpenAI
 from dotenv import load_dotenv
 import os
 import json
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+client = AzureOpenAI(
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+    api_version=os.getenv("AZURE_OPENAI_API_VERSION")
+)
 
 
 def extract_invoice_data(text):
@@ -24,12 +28,15 @@ Invoice text:
 {text}
 """
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
+    response = client.chat.completions.create(
+        model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+        messages=[
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0
     )
 
-    result = (response.text or "").strip()
+    result = response.choices[0].message.content.strip()
 
     if result.startswith("```json"):
         result = result.replace("```json", "").replace("```", "").strip()

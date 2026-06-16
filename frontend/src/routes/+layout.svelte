@@ -181,7 +181,7 @@
 
 	.nav-item.active {
 		color: var(--text-primary);
-		background: linear-gradient(90deg, rgba(99, 102, 241, 0.15) 0%, rgba(168, 85, 247, 0.05) 100%);
+		background: linear-gradient(90deg, rgba(132, 176, 193, 0.15) 0%, rgba(51, 74, 117, 0.05) 100%);
 		border: 1px solid var(--border-glow);
 		box-shadow: var(--shadow-sm);
 	}
@@ -209,7 +209,7 @@
 		padding: 2px 6px;
 		border-radius: 12px;
 		color: #fff;
-		box-shadow: 0 0 10px rgba(99, 102, 241, 0.3);
+		box-shadow: 0 0 10px rgba(132, 176, 193, 0.3);
 	}
 
 	.sidebar-footer {
@@ -313,7 +313,7 @@
 		overflow-y: auto;
 		display: flex;
 		flex-direction: column;
-		background: radial-gradient(circle at 50% -20%, rgba(99, 102, 241, 0.04) 0%, transparent 70%);
+		background: radial-gradient(circle at 50% -20%, rgba(132, 176, 193, 0.04) 0%, transparent 70%);
 	}
 
 	@media (max-width: 768px) {
